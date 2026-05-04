@@ -3,7 +3,7 @@
 #include <utility>
 #include <vector>
 
-class Robot_Morpheus : public RobotBase
+class Robot_Liam : public RobotBase
 {
 private:
     int scan_dir_ = 1;
@@ -27,9 +27,9 @@ private:
     }
 
 public:
-    Robot_Morpheus() : RobotBase(4, 3, railgun)
+    Robot_Liam() : RobotBase(4, 3, railgun)
     {
-        m_name = "Morpheus";
+        m_name = "Liam";
     }
 
     void get_radar_direction(int& dir) override
@@ -114,7 +114,7 @@ public:
 
 extern "C" RobotBase* create_robot()
 {
-    return new Robot_Morpheus();
+    return new Robot_Liam();
 }
 
 extern "C" const char* robot_summary()

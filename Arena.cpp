@@ -235,7 +235,12 @@ bool Arena::init_board_and_obstacles()
 bool Arena::compile_and_load_robots()
 {
     namespace fs = std::filesystem;
-    for (const auto& entry : fs::directory_iterator("."))
+    if (!fs::exists("robots") || !fs::is_directory("robots"))
+    {
+        std::cerr << "No 'robots' subdirectory found\n";
+        return false;
+    }
+    for (const auto& entry : fs::directory_iterator("robots"))
     {
         if (!entry.is_regular_file())
             continue;
@@ -251,22 +256,36 @@ bool Arena::compile_and_load_robots()
         const std::string load_path = "./" + so;
 
         if (std::system(("g++ -shared -fPIC -o " + so + " " + cpp + " RobotBase.o -I. -std=c++20").c_str()) != 0)
-            return false;
+        {
+            std::cerr << "Failed to compile " << fname << ", skipping\n";
+            continue;
+        }
         void* h = dlopen(load_path.c_str(), RTLD_LAZY);
         if (!h)
-            return false;
-        auto* make = reinterpret_cast<RobotFactory>(dlsym(h, "create_robot"));
-        auto* summ = reinterpret_cast<RobotSummaryFn>(dlsym(h, "robot_summary"));
-        if (!make || !summ)
         {
+            std::cerr << "Failed to load " << so << ": " << dlerror() << ", skipping\n";
+            continue;
+        }
+        auto* make = reinterpret_cast<RobotFactory>(dlsym(h, "create_robot"));
+        if (!make)
+        {
+            std::cerr << fname << " missing create_robot(), skipping\n";
             dlclose(h);
-            return false;
+            continue;
+        }
+        auto* summ = reinterpret_cast<RobotSummaryFn>(dlsym(h, "robot_summary"));
+        if (!summ)
+        {
+            std::cerr << fname << " missing robot_summary() (required by grading harness), skipping\n";
+            dlclose(h);
+            continue;
         }
         RobotBase* rb = make();
         if (!rb)
         {
+            std::cerr << "create_robot() returned null for " << fname << ", skipping\n";
             dlclose(h);
-            return false;
+            continue;
         }
         robots_.push_back({rb, h, true});
     }
@@ -405,9 +424,21 @@ bool Arena::handle_shot(int shooter_idx, int shot_row, int shot_col)
             continue;
         hit.insert(o);
     }
+    if (cfg_.game_state_live && hit.empty())
+        std::cout << "  shot missed\n";
     for (int t : hit)
     {
+        const int before = robots_[static_cast<size_t>(t)].robot->get_health();
         damage_robot(t, w);
+        if (cfg_.game_state_live)
+        {
+            int tr2 = 0, tc2 = 0;
+            robots_[static_cast<size_t>(t)].robot->get_current_location(tr2, tc2);
+            const int dealt = before - robots_[static_cast<size_t>(t)].robot->get_health();
+            std::cout << "  hit " << robots_[static_cast<size_t>(t)].robot->m_name
+                      << " at (" << tr2 << "," << tc2 << ") for " << dealt
+                      << " damage (health now " << robots_[static_cast<size_t>(t)].robot->get_health() << ")\n";
+        }
         if (robots_[static_cast<size_t>(t)].robot->get_health() <= 0)
             robots_[static_cast<size_t>(t)].alive = false;
     }
@@ -555,16 +586,51 @@ int Arena::run()
 
             int rdir = 0;
             L.robot->get_radar_direction(rdir);
-            L.robot->process_radar_results(scan_radar(static_cast<int>(i), rdir));
+            const auto radar_results = scan_radar(static_cast<int>(i), rdir);
+
+            if (cfg_.game_state_live)
+            {
+                int rr = 0, rc = 0;
+                L.robot->get_current_location(rr, rc);
+                std::cout << "\n" << L.robot->m_name << " '" << L.robot->m_character
+                          << "' at (" << rr << "," << rc << ")\n";
+                if (radar_results.empty())
+                    std::cout << "  radar: nothing\n";
+                else
+                {
+                    std::cout << "  radar:";
+                    for (const auto& ro : radar_results)
+                        std::cout << " " << ro.m_type << "(" << ro.m_row << "," << ro.m_col << ")";
+                    std::cout << "\n";
+                }
+            }
+
+            L.robot->process_radar_results(radar_results);
 
             int tr = 0, tc = 0;
             if (L.robot->get_shot_location(tr, tc))
+            {
+                if (cfg_.game_state_live)
+                {
+                    static const char* wnames[] = {"flamethrower", "railgun", "grenade", "hammer"};
+                    std::cout << "  firing " << wnames[static_cast<int>(L.robot->get_weapon())]
+                              << " at (" << tr << "," << tc << ")\n";
+                }
                 handle_shot(static_cast<int>(i), tr, tc);
+            }
             else
             {
+                if (cfg_.game_state_live)
+                    std::cout << "  not firing\n";
                 int md = 0, dist = 0;
                 L.robot->get_move_direction(md, dist);
                 handle_move(static_cast<int>(i), md, dist);
+                if (cfg_.game_state_live)
+                {
+                    int nr = 0, nc = 0;
+                    L.robot->get_current_location(nr, nc);
+                    std::cout << "  moved to (" << nr << "," << nc << ")\n";
+                }
             }
 
             if (cfg_.game_state_live && cfg_.sleep_interval > 0.0)
